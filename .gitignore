@@ -1,0 +1,6 @@
+/dist/
+/课堂管理密码.txt
+/.dev.vars
+/.wrangler/
+/.env*
+*.sqlite*
