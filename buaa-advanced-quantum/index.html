@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="北航物理学院高等量子力学课程小组研究。查看汇报进度，提交实名评分，交流汇报课件。">
+  <meta name="course-api-origin" content="https://buaa-advanced-quantum.linencrow.chatgpt.site">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://buaa-advanced-quantum.linencrow.chatgpt.site; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <link rel="canonical" href="https://zjzphysics.github.io/buaa-advanced-quantum/">
+  <meta name="theme-color" content="#0c2751">
+  <title>北航物理学院高等量子力学课程小组研究</title>
+  <link rel="icon" href="../public/beihang.jpg">
+  <link rel="stylesheet" href="../public/app.css">
+  <script type="module" src="../public/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳转到主要内容</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="#overview" aria-label="北航物理学院课程首页">
+        <img src="../public/beihang.jpg" width="44" height="44" alt="北京航空航天大学校徽">
+        <span><strong>北航物理学院</strong><small>BEIHANG UNIVERSITY · SCHOOL OF PHYSICS</small></span>
+      </a>
+      <nav class="navigation" aria-label="课程导航">
+        <a href="#overview" data-tab="overview" aria-current="page">汇报总览</a>
+        <a href="#score" data-tab="score">实名评分</a>
+        <a href="#materials" data-tab="materials">课件交流</a>
+      </nav>
+      <div id="identity" class="identity"><a class="button secondary small" href="#score">学生登录</a></div>
+    </div>
+  </header>
+  <main id="main" class="shell" tabindex="-1">
+    <section class="hero" aria-labelledby="course-title">
+      <canvas id="waves" aria-hidden="true"></canvas>
+      <div class="hero-content">
+        <p class="kicker"><span></span> ADVANCED QUANTUM MECHANICS</p>
+        <h1 id="course-title"><span class="sr-only">北航物理学院</span>高等量子力学<br>课程小组研究</h1>
+        <p class="intro">小组汇报、实名评分与研究课件交流</p>
+        <div class="hero-actions"><a class="button light" href="#score">进入实名评分 <span aria-hidden="true">↗</span></a><a class="button hero-secondary" href="#materials">浏览课件</a></div>
+      </div>
+      <span class="wave-label" aria-hidden="true">|ψ(x, t)〉</span>
+    </section>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="panel" aria-label="课程操作" aria-busy="true"><p class="loading">正在读取课程状态…</p></section>
+    <noscript><p class="notice">请启用 JavaScript 以使用课堂评分与课件功能。</p></noscript>
+  </main>
+  <footer class="site-footer">
+    <div class="shell footer-inner">
+      <a href="https://physics.buaa.edu.cn/" aria-label="北京航空航天大学物理学院官网"><img src="../public/physics.png" width="200" height="28" alt="北京航空航天大学物理学院标识"></a>
+      <a href="#admin" data-tab="admin">课程管理</a>
+    </div>
+  </footer>
+</body>
+</html>
