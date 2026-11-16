@@ -1,6 +1,9 @@
 const panel = document.querySelector('#panel');
 const notice = document.querySelector('#notice');
 const identity = document.querySelector('#identity');
+const apiOrigin = document.querySelector('meta[name="course-api-origin"]')?.content || location.origin;
+const usesExternalApi = apiOrigin !== location.origin;
+const sessionKey = 'buaa-advanced-quantum-session';
 let state = null;
 let busy = false;
 let tab = '';
@@ -17,8 +20,15 @@ const result = value => value == null ? '—' : Number(value).toFixed(2);
 const button = (label, attrs = '', style = '') => `<button class="button ${style}" ${attrs}>${label}</button>`;
 const heading = (title, subtitle, actions = '') => `<div class="section-heading"><div><h2 tabindex="-1">${title}</h2>${subtitle ? `<p class="muted">${subtitle}</p>` : ''}</div>${actions}</div>`;
 
+function apiFetch(path, options = {}) {
+  const headers = new Headers(options.headers);
+  const token = usesExternalApi ? sessionStorage.getItem(sessionKey) : null;
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(new URL(path, apiOrigin), { ...options, cache: 'no-store', headers, credentials: usesExternalApi ? 'omit' : 'same-origin' });
+}
+
 async function request(path, options = {}) {
-  const response = await fetch(path, { cache: 'no-store', ...options });
+  const response = await apiFetch(path, options);
   if (!response.headers.get('Content-Type')?.includes('application/json')) throw new Error('暂时无法读取课程服务。请稍后刷新。');
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || '操作失败，请重试。');
@@ -37,8 +47,10 @@ function message(value, error = false) {
 
 async function refresh(force = false) {
   const current = ++refreshId;
+  const token = usesExternalApi ? sessionStorage.getItem(sessionKey) : null;
   const next = await request('/api/state');
   if (current !== refreshId) return;
+  if (token && !next.user && sessionStorage.getItem(sessionKey) === token) sessionStorage.removeItem(sessionKey);
   if (force || JSON.stringify(state) !== JSON.stringify(next)) {
     state = next;
     render();
@@ -94,10 +106,17 @@ function scorePage() {
     ${history ? `<div class="panel-card"><h3>我的评分记录</h3><ul class="list">${history}</ul></div>` : ''}</div>`;
 }
 
+function fileLink(label, path, filename, style, preview = false) {
+  const action = usesExternalApi
+    ? ` data-course-file="${path}" data-filename="${escape(filename)}"${preview ? ' data-preview="true"' : ''}`
+    : preview ? ' target="_blank" rel="noopener"' : '';
+  return `<a class="${style}" href="${usesExternalApi ? `#${tab}` : path}"${action}>${label}</a>`;
+}
+
 function materialItems(group) {
   const options = [];
-  if (group.pdf_name) options.push(`<div class="material-link"><span>${escape(group.pdf_name)}</span><a class="text-link" href="/api/groups/${group.id}/pdf" target="_blank" rel="noopener">预览 PDF</a></div>`);
-  if (group.deck_name) options.push(`<div class="material-link"><span>${escape(group.deck_name)}</span><a class="text-link" href="/api/groups/${group.id}/deck">下载 PPT</a></div>`);
+  if (group.pdf_name) options.push(`<div class="material-link"><span>${escape(group.pdf_name)}</span>${fileLink('预览 PDF', `/api/groups/${group.id}/pdf`, group.pdf_name, 'text-link', true)}</div>`);
+  if (group.deck_name) options.push(`<div class="material-link"><span>${escape(group.deck_name)}</span>${fileLink('下载 PPT', `/api/groups/${group.id}/deck`, group.deck_name, 'text-link')}</div>`);
   return options.join('') || '<p class="muted">暂无课件</p>';
 }
 
@@ -153,7 +172,7 @@ function adminPage() {
     <p class="muted">组均分为该组有效评分的算术平均值。全班总平均按八个组均分等权计算。</p>
     <p class="metric">全班总平均 <strong>${result(state.overall)}</strong></p>
     <p class="muted">${state.visible ? '组均分已向登录的课程成员发布。' : '成绩目前仅管理员可见。'}</p>
-    <div class="actions controls-block"><a class="button secondary small" href="/api/admin/summary.csv">导出组均分</a><a class="button secondary small" href="/api/admin/scores.csv">导出实名明细</a>
+    <div class="actions controls-block">${fileLink('导出组均分', '/api/admin/summary.csv', '小组均分.csv', 'button secondary small')}${fileLink('导出实名明细', '/api/admin/scores.csv', '实名评分明细.csv', 'button secondary small')}
     ${state.complete ? button(state.visible ? '撤回成绩发布' : '向课程成员发布成绩', 'data-action="publish"', 'small') : ''}</div></div>
     ${heading('管理评分轮次', active ? `${groupName(active.id)}正在收集评分。` : '同一时间可开放一个组，结束前请核对有效评分份数。')}
     <div class="admin-grid">${state.groups.map(groupControl).join('')}</div></div>`;
@@ -221,7 +240,8 @@ panel.addEventListener('submit', event => {
   const handlers = {
     login: async () => {
       const input = form.dataset.admin === 'true' ? { admin: true, secret: values.get('secret') } : { studentId: values.get('studentId') };
-      await write('/api/login', input);
+      const data = await write('/api/login', input);
+      if (usesExternalApi && data.token) sessionStorage.setItem(sessionKey, data.token);
       form.reset();
       return '身份验证成功。';
     },
@@ -256,7 +276,38 @@ panel.addEventListener('submit', event => {
   run(handlers[type], event.submitter);
 });
 
+async function transferFile(link) {
+  const preview = link.dataset.preview === 'true' ? window.open('about:blank', '_blank') : null;
+  if (preview) preview.opener = null;
+  try {
+    const response = await apiFetch(link.dataset.courseFile);
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      throw new Error(error?.error || '读取文件失败，请重试。');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    if (preview && !preview.closed) {
+      preview.location.replace(url);
+    } else {
+      const download = document.createElement('a');
+      download.href = url;
+      download.download = link.dataset.filename;
+      download.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    preview?.close();
+    message(error.message, true);
+  }
+}
+
 document.addEventListener('click', event => {
+  const file = event.target.closest('[data-course-file]');
+  if (file) {
+    event.preventDefault();
+    void transferFile(file);
+    return;
+  }
   const control = event.target.closest('button[data-action]');
   if (!control || busy) return;
   const { action, group, kind } = control.dataset;
@@ -272,7 +323,8 @@ document.addEventListener('click', event => {
   if (action === 'delete-material' && !confirm(`移除${groupName(group)}的这份课件？`)) return;
   const handlers = {
     logout: async () => {
-      await write('/api/logout', {});
+      if (usesExternalApi) sessionStorage.removeItem(sessionKey);
+      else await write('/api/logout', {});
       return '已退出登录。';
     },
     publish: async () => {
