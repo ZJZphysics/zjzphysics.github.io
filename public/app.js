@@ -24,7 +24,14 @@ function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers);
   const token = usesExternalApi ? sessionStorage.getItem(sessionKey) : null;
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  return fetch(new URL(path, apiOrigin), { ...options, cache: 'no-store', headers, credentials: usesExternalApi ? 'omit' : 'same-origin' });
+  return fetch(new URL(path, apiOrigin), { ...options, cache: 'no-store', headers, credentials: usesExternalApi ? 'omit' : 'same-origin' })
+    .catch(error => {
+      if (!(error instanceof TypeError)) throw error;
+      const advice = /MicroMessenger/i.test(navigator.userAgent)
+        ? '请从微信右上角选择「在浏览器打开」。若仍失败，请切换网络后重试。'
+        : '请切换 Wi-Fi 或移动数据后重试。';
+      throw new Error(`暂时无法连接评分服务。${advice}`);
+    });
 }
 
 async function request(path, options = {}) {
@@ -204,9 +211,13 @@ function navigate() {
 }
 
 function showLoadError(error) {
-  if (state) return;
+  if (state) {
+    message(error.message, true);
+    return;
+  }
+  message('');
   panel.removeAttribute('aria-busy');
-  panel.innerHTML = `<div class="panel-card"><p>${escape(error.message)}</p><div class="controls-block">${button('重新加载', 'data-action="refresh"')}</div></div>`;
+  panel.innerHTML = `<div class="panel-card"><p role="status">${escape(error.message)}</p><div class="controls-block">${button('重新加载', 'data-action="refresh"')}</div></div>`;
 }
 
 async function run(action, element) {
@@ -313,10 +324,8 @@ document.addEventListener('click', event => {
   const { action, group, kind } = control.dataset;
   if (action === 'refresh') {
     control.disabled = true;
-    refresh(true).then(() => message('已更新课程状态。')).catch(error => {
-      showLoadError(error);
-      message(error.message, true);
-    }).finally(() => { control.disabled = false; });
+    refresh(true).then(() => message('已更新课程状态。')).catch(showLoadError)
+      .finally(() => { control.disabled = false; });
     return;
   }
   if (action === 'close' && !confirm(`结束${groupName(group)}的评分？结束后本轮会锁定。`)) return;
