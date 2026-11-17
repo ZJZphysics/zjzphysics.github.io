@@ -1,6 +1,8 @@
 const maxUpload = 30 * 1024 * 1024;
 const cookieName = '__Host-aq-session';
 const studentSessionAge = 12 * 3600;
+const adminSessionAge = 6 * 3600;
+const pagesOrigin = 'https://zjzphysics.github.io';
 const encoder = new TextEncoder();
 const noCache = 'private, no-store';
 const security = {
@@ -67,9 +69,9 @@ async function digest(value) {
   return hex(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
 }
 
-async function signStudentSession(payload, secret) {
+async function signSession(purpose, payload, secret) {
   const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  return hex(await crypto.subtle.sign('HMAC', key, encoder.encode(`student-session:${payload}`)));
+  return hex(await crypto.subtle.sign('HMAC', key, encoder.encode(`${purpose}:${payload}`)));
 }
 
 function normalizeId(value) {
@@ -98,19 +100,38 @@ function sessionCookie(value, age) {
   return `${cookieName}=${value}; Path=/; Max-Age=${age}; Secure; HttpOnly; SameSite=Strict`;
 }
 
+function fromPages(request) {
+  return request.headers.get('Origin') === pagesOrigin;
+}
+
+function expiry(age) {
+  return Math.floor(Date.now() / 1000) + age;
+}
+
+function sessionResponse(request, value, age) {
+  if (fromPages(request)) return json({ ok: true, token: value });
+  return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(value, age) });
+}
+
 async function identity(request, env) {
   const secret = env.COURSE_ADMIN_PASSWORD;
   if (!secret) return null;
-  const value = request.headers.get('Cookie')?.split(/;\s*/).find(part => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
-  if (/^a\.[a-f0-9]{64}$/.test(value ?? '')) {
+  const pages = fromPages(request);
+  const value = pages
+    ? /^Bearer ([\w.%\-]+)$/.exec(request.headers.get('Authorization') ?? '')?.[1]
+    : request.headers.get('Cookie')?.split(/;\s*/).find(part => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
+  if (pages) {
+    const admin = /^p\.(\d{10})\.([a-f0-9]{64})$/.exec(value ?? '');
+    if (admin && Number(admin[1]) > expiry(0) && matches(admin[2], await signSession('pages-admin-session', admin[1], secret))) return { role: 'admin' };
+  } else if (/^a\.[a-f0-9]{64}$/.test(value ?? '')) {
     const expected = await digest(`admin-session:${secret}`);
     if (matches(value.slice(2), expected)) return { role: 'admin' };
   }
   const session = /^i\.([A-Z0-9_%a-z-]{2,400})\.(\d{10})\.([a-f0-9]{64})$/.exec(value ?? '');
   if (!session) return null;
   const [, encodedId, expires, signature] = session;
-  if (Number(expires) <= Math.floor(Date.now() / 1000)) return null;
-  const expected = await signStudentSession(`${encodedId}.${expires}`, secret);
+  if (Number(expires) <= expiry(0)) return null;
+  const expected = await signSession('student-session', `${encodedId}.${expires}`, secret);
   if (!matches(signature, expected)) return null;
   const student = await findStudent(env.DB, decodeURIComponent(encodedId));
   return student ? { role: 'student', ...student } : null;
@@ -130,14 +151,19 @@ async function login(request, env) {
   if (data?.admin === true) {
     if (env.COURSE_ADMIN_PASSWORD && /^[A-Za-z0-9_-]{32}$/.test(secret)
       && matches(await digest(secret), await digest(env.COURSE_ADMIN_PASSWORD))) {
-      return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(`a.${await digest(`admin-session:${env.COURSE_ADMIN_PASSWORD}`)}`, 6 * 3600) });
+      if (fromPages(request)) {
+        const expires = expiry(adminSessionAge);
+        const signature = await signSession('pages-admin-session', expires, env.COURSE_ADMIN_PASSWORD);
+        return sessionResponse(request, `p.${expires}.${signature}`, adminSessionAge);
+      }
+      return sessionResponse(request, `a.${await digest(`admin-session:${env.COURSE_ADMIN_PASSWORD}`)}`, adminSessionAge);
     }
   } else if (env.COURSE_ADMIN_PASSWORD) {
     const id = normalizeId(data?.studentId);
     if (id && await findStudent(env.DB, id)) {
-      const payload = `${encodeURIComponent(id)}.${Math.floor(Date.now() / 1000) + studentSessionAge}`;
-      const signature = await signStudentSession(payload, env.COURSE_ADMIN_PASSWORD);
-      return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(`i.${payload}.${signature}`, studentSessionAge) });
+      const payload = `${encodeURIComponent(id)}.${expiry(studentSessionAge)}`;
+      const signature = await signSession('student-session', payload, env.COURSE_ADMIN_PASSWORD);
+      return sessionResponse(request, `i.${payload}.${signature}`, studentSessionAge);
     }
   }
   throw new CourseError(401, data?.admin === true ? '管理员密码无效。' : '学号未在课程名单中，请核对后重试。');
@@ -407,11 +433,18 @@ async function materials(request, env, user, id, kind, context) {
 async function api(request, env, context, url) {
   const { pathname } = url;
   const method = request.method;
-  if (method !== 'GET' && (request.headers.get('Origin') !== url.origin || request.headers.get('Sec-Fetch-Site') === 'cross-site')) {
+  if (method === 'OPTIONS' && fromPages(request)) {
+    return response(null, { 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Filename', 'Access-Control-Max-Age': '600' }, 204);
+  }
+  if (method !== 'GET' && !fromPages(request)
+    && (request.headers.get('Origin') !== url.origin || request.headers.get('Sec-Fetch-Site') === 'cross-site')) {
     throw new CourseError(403, '请从课程网站上提交。');
   }
   if (pathname === '/api/login' && method === 'POST') return login(request, env);
-  if (pathname === '/api/logout' && method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', 0) });
+  if (pathname === '/api/logout' && method === 'POST') {
+    return fromPages(request) ? json({ ok: true }) : json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', 0) });
+  }
   const user = await identity(request, env);
   if (pathname === '/api/state' && method === 'GET') return json(await courseState(env.DB, user));
   const route = pathname.match(/^\/api\/groups\/([1-8])\/(score|deck|pdf|config)$/);
@@ -435,19 +468,28 @@ async function api(request, env, context, url) {
   throw new CourseError(404, '页面或操作不存在。');
 }
 
+async function route(request, env, context, url) {
+  try {
+    if (url.pathname.startsWith('/api/')) return await api(request, env, context, url);
+    const asset = Object.hasOwn(assets, url.pathname) && assets[url.pathname];
+    if (!asset || !['GET', 'HEAD'].includes(request.method)) throw new CourseError(404, '页面不存在。');
+    const bytes = request.method === 'HEAD' ? null : Uint8Array.from(atob(asset.base64), char => char.charCodeAt(0));
+    return response(bytes, { 'Content-Type': asset.type });
+  } catch (error) {
+    if (error instanceof CourseError) return json({ error: error.message }, error.status);
+    console.error('Course request failed', error?.message);
+    return json({ error: '服务暂时不可用。请稍后重试。' }, 500);
+  }
+}
+
 export default {
   async fetch(request, env, context) {
-    try {
-      const url = new URL(request.url);
-      if (url.pathname.startsWith('/api/')) return await api(request, env, context, url);
-      const asset = Object.hasOwn(assets, url.pathname) && assets[url.pathname];
-      if (!asset || !['GET', 'HEAD'].includes(request.method)) throw new CourseError(404, '页面不存在。');
-      const bytes = request.method === 'HEAD' ? null : Uint8Array.from(atob(asset.base64), char => char.charCodeAt(0));
-      return response(bytes, { 'Content-Type': asset.type });
-    } catch (error) {
-      if (error instanceof CourseError) return json({ error: error.message }, error.status);
-      console.error('Course request failed', error?.message);
-      return json({ error: '服务暂时不可用。请稍后重试。' }, 500);
+    const url = new URL(request.url);
+    const result = await route(request, env, context, url);
+    if (url.pathname.startsWith('/api/')) {
+      result.headers.append('Vary', 'Origin');
+      if (fromPages(request)) result.headers.set('Access-Control-Allow-Origin', pagesOrigin);
     }
+    return result;
   },
 };

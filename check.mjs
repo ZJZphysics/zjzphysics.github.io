@@ -48,6 +48,8 @@ const bucket = {
   async delete(key) { objects.delete(key); },
 };
 const origin = 'https://course.example';
+const pagesOrigin = 'https://zjzphysics.github.io';
+const pagesHeaders = { Origin: pagesOrigin, 'Sec-Fetch-Site': 'cross-site' };
 const env = { DB: db, BUCKET: bucket, COURSE_ADMIN_PASSWORD: randomBytes(24).toString('base64url') };
 
 async function call(path, { method = 'GET', data, cookie, headers = {}, bytes } = {}) {
@@ -83,6 +85,25 @@ await assertStatus(call('/api/groups/1/deck'), 401);
 await assertStatus(post('/api/groups/1/score', { value: 100 }), 401);
 await assertStatus(call('/api/login', { method: 'POST', data: { secret: env.COURSE_ADMIN_PASSWORD, admin: true }, headers: { Origin: 'https://other.example' } }), 403);
 
+const preflight = await assertStatus(call('/api/groups/1/deck', { method: 'OPTIONS', headers: {
+  ...pagesHeaders, 'Access-Control-Request-Method': 'PUT', 'Access-Control-Request-Headers': 'authorization,x-filename',
+} }), 204);
+assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), pagesOrigin);
+assert.match(preflight.headers.get('Access-Control-Allow-Methods'), /\bPUT\b/);
+assert.match(preflight.headers.get('Access-Control-Allow-Headers'), /Authorization/);
+const foreignPreflight = await assertStatus(call('/api/state', { method: 'OPTIONS', headers: { Origin: 'https://other.example' } }), 403);
+assert.equal(foreignPreflight.headers.get('Access-Control-Allow-Origin'), null);
+const pagesDenied = await assertStatus(call('/api/login', { method: 'POST', data: { studentId: 'SY2600101' }, headers: pagesHeaders }), 401);
+assert.equal(pagesDenied.headers.get('Access-Control-Allow-Origin'), pagesOrigin);
+
+const pagesAdminLogin = await assertStatus(call('/api/login', { method: 'POST', data: { admin: true, secret: env.COURSE_ADMIN_PASSWORD }, headers: pagesHeaders }), 200);
+assert.equal(pagesAdminLogin.headers.get('Set-Cookie'), null);
+const { token: pagesAdmin } = await pagesAdminLogin.json();
+const pagesAdminHeaders = { ...pagesHeaders, Authorization: `Bearer ${pagesAdmin}` };
+await assertStatus(call('/api/admin/summary.csv', { headers: pagesAdminHeaders }), 200);
+await assertStatus(call('/api/admin/summary.csv', { headers: { ...pagesAdminHeaders, Origin: 'https://other.example' } }), 403);
+await assertStatus(call('/api/admin/summary.csv', { headers: { ...pagesHeaders, Authorization: `Bearer ${pagesAdmin.replace(/^p\.\d+/, 'p.1000000000')}` } }), 403);
+
 const admin = await login(env.COURSE_ADMIN_PASSWORD, true);
 await assertStatus(post('/api/groups/8/config', { action: 'open' }, admin), 409);
 await assertStatus(post('/api/login', { studentId: 'SY2600001' }), 401);
@@ -105,6 +126,13 @@ await assertStatus(post('/api/admin/roster', { roster: 'SY2600001', defaultGroup
 assert.equal((await (await call('/api/state', { cookie: student1 })).json()).user.group_id, 1);
 await assertStatus(post('/api/admin/roster', { roster: '学号\t姓名\t组号\nSY2600002\t测试乙\t2\nSY2600003\t测试丙\t3' }, admin), 201);
 const [student2, student3] = await Promise.all(['SY2600002', 'sy2600003'].map(id => login(id)));
+const pagesStudentLogin = await assertStatus(call('/api/login', { method: 'POST', data: { studentId: 'sy2600002' }, headers: pagesHeaders }), 200);
+assert.equal(pagesStudentLogin.headers.get('Set-Cookie'), null);
+const { token: pagesStudent } = await pagesStudentLogin.json();
+const pagesStudentHeaders = { ...pagesHeaders, Authorization: `Bearer ${pagesStudent}` };
+const pagesStudentState = await (await call('/api/state', { headers: pagesStudentHeaders })).json();
+assert.deepEqual(pagesStudentState.user, { role: 'student', id: 'SY2600002', group_id: 2 });
+await assertStatus(call('/api/admin/scores.csv', { headers: pagesStudentHeaders }), 403);
 await assertStatus(post('/api/admin/roster', { roster: 'student_id,group\nsy2600099,8' }, admin), 201);
 assert.equal(sqlite.prepare("SELECT COUNT(*) AS total FROM students WHERE id = 'SY2600099' COLLATE NOCASE").get().total, 1);
 await assertStatus(post('/api/groups/1/config', { action: 'title', title: '自旋研究' }, admin), 200);
@@ -116,6 +144,7 @@ await assertStatus(post('/api/groups/1/score', { value: 100 }, pending), 403);
 await assertStatus(post('/api/groups/2/score', { value: 100 }, student1), 409);
 await assertStatus(post('/api/groups/1/score', { value: 101 }, student2), 400);
 await assertStatus(post('/api/groups/1/score', { value: 80 }, student2), 201);
+await assertStatus(call('/api/groups/1/score', { method: 'POST', data: { value: 80 }, headers: pagesStudentHeaders }), 200);
 await assertStatus(post('/api/groups/1/score', { value: 80 }, student2), 200);
 await assertStatus(post('/api/groups/1/score', { value: 81 }, student2), 409);
 await assertStatus(post('/api/groups/1/score', { value: 100 }, student3), 201);
@@ -134,6 +163,9 @@ await assertStatus(call('/api/groups/1/pdf'), 401);
 const readPdf = await assertStatus(call('/api/groups/1/pdf', { cookie: student2 }), 200);
 assert.match(readPdf.headers.get('Content-Disposition'), /^inline/);
 assert.deepEqual(new Uint8Array(await readPdf.arrayBuffer()), pdf);
+const pagesPdf = await assertStatus(call('/api/groups/1/pdf', { headers: pagesStudentHeaders }), 200);
+assert.equal(pagesPdf.headers.get('Access-Control-Allow-Origin'), pagesOrigin);
+assert.deepEqual(new Uint8Array(await pagesPdf.arrayBuffer()), pdf);
 await assertStatus(call('/api/groups/1/deck', { ...options, cookie: student1, headers: { 'X-Filename': 'wrong.pptx' } }), 400);
 const deck = new Uint8Array([80, 75, 3, 4, 0, 1]);
 await assertStatus(call('/api/groups/1/deck', { ...options, bytes: deck, cookie: student1, headers: { 'X-Filename': 'example.pptx' } }), 200);

@@ -1,8 +1,6 @@
 # 北航物理学院高等量子力学课程小组研究
 
-[GitHub Pages 公开入口](https://zjzphysics.github.io/) · [课程评分系统](https://buaa-advanced-quantum.linencrow.chatgpt.site/)
-
-本仓库包含课程网站的源码。GitHub Pages 发布根目录的 `index.html`，并引导访问者进入运行中的课程网站。登录、评分、统计和课件交流由课程网站的服务端处理。
+[课程网站](https://zjzphysics.github.io/buaa-advanced-quantum/) · [课程管理](https://zjzphysics.github.io/buaa-advanced-quantum/#admin)
 
 ## 上课前
 
@@ -23,4 +21,5 @@
 
 - 构建使用 Node.js 24。运行 `node build.mjs` 生成 `dist/server/index.js`，再运行 `node check.mjs` 执行独立的 SQLite 和对象存储模拟测试。
 - 运行时使用 Cloudflare Worker、D1（`DB`）及 R2（`BUCKET`）。首次部署前按顺序应用 `drizzle/` 中的迁移。在托管平台将 `COURSE_ADMIN_PASSWORD` 配置为 24 字节随机值的无填充 Base64URL 字符串。
+- GitHub Pages 从公开仓库发布 `/buaa-advanced-quantum/` 下的前端。页面通过 `course-api-origin` 元数据指定评分后端，通过限时会话令牌访问评分、导出和课件接口。服务端允许 `https://zjzphysics.github.io` 跨域访问。
 - 管理密码、名册、成绩及上传课件均属于运行数据。源码仓库只包含程序、空的数据结构和 8 个初始组别。
